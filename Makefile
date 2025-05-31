@@ -1,34 +1,30 @@
-CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2 $(shell wx-config --cxxflags)
-LDFLAGS = $(shell wx-config --libs) -pthread
+CXX       := g++
+CXXFLAGS  := -std=c++17 -Wall -O2 `wx-config --cxxflags`
+LDFLAGS   := `wx-config --libs`
 
-TARGET = scheduler_simulator
+SOURCES   := main.cpp \
+             common.cpp \
+             FIFO.cpp \
+             SJF.cpp \
+             SRT.cpp \
+             Round_Robin.cpp \
+             priority.cpp \
+             mutex_simulator.cpp \
+             semaforo_simulator.cpp
 
-SOURCES = main.cpp \
-          common.cpp \
-          FIFO.cpp \
-          SJF.cpp \
-          SRT.cpp \
-          Round_Robin.cpp \
-          priority.cpp \
-          mutex_simulator.cpp \
-          semaforo_simulator.cpp
+OBJECTS   := $(SOURCES:.cpp=.o)
+EXECUTABLE:= scheduler_simulator
 
-OBJECTS = $(SOURCES:.cpp=.o)
+all: $(EXECUTABLE)
 
-all: $(TARGET)
+$(EXECUTABLE): $(OBJECTS)
+	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS)
 
-$(TARGET): $(OBJECTS)
-	$(CXX) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
-
-%.o: %.cpp scheduler.h
+%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(EXECUTABLE)
 
-run: $(TARGET)
-	./$(TARGET)
+.PHONY: all clean
 
-
-.PHONY: all clean run deps
