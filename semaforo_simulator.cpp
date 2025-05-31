@@ -1,173 +1,78 @@
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <vector>
-#include <map>
+#include "scheduler.h"
 #include <thread>
 #include <chrono>
+#include <vector>
 
-#define RESET   "\033[0m"
-#define GREEN   "\033[32m"
-#define YELLOW  "\033[33m"
-#define RED     "\033[31m"
-
-struct Proceso {
-    std::string pid;
-    int burst_time;
-    int arrival_time;
-    int priority;
-};
-
-struct Recurso {
-    std::string nombre;
-    int contador;
-    std::map<std::string, int> procesos_uso; 
-};
-
-struct Accion {
-    std::string pid;
-    std::string tipo; // READ o WRITE
-    std::string recurso;
-    int ciclo;
-};
-
-struct Evento {
-    int ciclo;
-    std::string contenido;
-    std::string color;
-};
-
-// Leer Procesos
-std::vector<Proceso> leerProcesos(const std::string &filename) {
-    std::vector<Proceso> procesos;
-    std::ifstream file(filename);
-    std::string linea;
-    while (std::getline(file, linea)) {
-        std::stringstream ss(linea);
-        std::string pid, bt, at, prio;
-        if (std::getline(ss, pid, ',') && std::getline(ss, bt, ',') &&
-            std::getline(ss, at, ',') && std::getline(ss, prio, ',')) {
-            procesos.push_back({pid, std::stoi(bt), std::stoi(at), std::stoi(prio)});
-        }
-    }
-    return procesos;
-}
-
-// Leer Recursos
-std::map<std::string, Recurso> leerRecursos(const std::string &filename) {
-    std::map<std::string, Recurso> recursos;
-    std::ifstream file(filename);
-    std::string linea;
-    while (std::getline(file, linea)) {
-        std::stringstream ss(linea);
-        std::string nombre, contador;
-        if (std::getline(ss, nombre, ',') && std::getline(ss, contador, ',')) {
-            Recurso r;
-            r.nombre = nombre;
-            r.contador = std::stoi(contador);
-            recursos[nombre] = r;
-        }
-    }
-    return recursos;
-}
-
-// Leer Acciones
-std::vector<Accion> leerAcciones(const std::string &filename) {
-    std::vector<Accion> acciones;
-    std::ifstream file(filename);
-    std::string linea;
-    while (std::getline(file, linea)) {
-        std::stringstream ss(linea);
-        std::string pid, tipo, recurso, ciclo;
-        if (std::getline(ss, pid, ',') && std::getline(ss, tipo, ',') &&
-            std::getline(ss, recurso, ',') && std::getline(ss, ciclo, ',')) {
-            acciones.push_back({pid, tipo, recurso, std::stoi(ciclo)});
-        }
-    }
-    return acciones;
-}
-
-// Simulación Semáforos
-void simularSemaforo(std::vector<Proceso> &procesos, std::map<std::string, Recurso> &recursos, std::vector<Accion> &acciones) {
+void simularSemaforo(std::vector<Proceso>& procesos, std::map<std::string, Recurso>& recursos, 
+                     std::vector<Accion>& acciones, UpdateCallback updateGUI) {
     int ciclo = 0;
     int max_ciclo = 0;
-    for (auto &a : acciones) {
+    
+    // Encontrar el ciclo máximo
+    for (const auto& a : acciones) {
         if (a.ciclo > max_ciclo) max_ciclo = a.ciclo;
     }
-    max_ciclo += 5; // margen
-
-    std::vector<Evento> linea_tiempo;
-
-    std::cout << "\n--- Simulacion Semaforos ---\n";
-
+    max_ciclo += 5; // Margen adicional
+    
+    // Resetear estado de recursos
+    for (auto& [nombre, recurso] : recursos) {
+        recurso.contador = recurso.contador_inicial;
+        recurso.procesos_uso.clear();
+    }
+    
+    // Simulación ciclo por ciclo
     for (; ciclo <= max_ciclo; ciclo++) {
-        std::cout << "\nCiclo " << ciclo << ":\n";
         bool accion_realizada = false;
-
-        // Procesar nuevas acciones
-        for (auto &a : acciones) {
+        
+        // Procesar nuevas acciones del ciclo actual
+        for (const auto& a : acciones) {
             if (a.ciclo == ciclo) {
-                auto &recurso = recursos[a.recurso];
+                auto& recurso = recursos[a.recurso];
+                std::string bloque;
+                
                 if (recurso.contador > 0) {
-                    // ACCESSED
+                    // Hay recursos disponibles - ACCESSED
                     recurso.contador--;
-                    recurso.procesos_uso[a.pid] = 1; // 1 ciclo de uso
-                    std::string bloque = "[" + a.pid + "-" + a.tipo + "-" + a.recurso + "-ACCESSED]";
-                    std::cout << GREEN << bloque << RESET << "\n";
-                    linea_tiempo.push_back({ciclo, bloque, GREEN});
+                    recurso.procesos_uso[a.pid] = 1; 
+                    bloque = "[" + a.pid + "-" + a.tipo + "-" + a.recurso + "-ACCESSED]";
                 } else {
-                    // WAITING
-                    std::string bloque = "[" + a.pid + "-" + a.tipo + "-" + a.recurso + "-WAITING]";
-                    std::cout << YELLOW << bloque << RESET << "\n";
-                    linea_tiempo.push_back({ciclo, bloque, YELLOW});
+                    // No hay recursos disponibles - WAITING
+                    bloque = "[" + a.pid + "-" + a.tipo + "-" + a.recurso + "-WAITING]";
                 }
+                
+                if (updateGUI) {
+                    updateGUI(bloque, ciclo);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                }
+                
                 accion_realizada = true;
             }
         }
-
-        // Liberar recursos usados en ciclos anteriores
-        for (auto &r : recursos) {
-            std::vector<std::string> terminados;
-            for (auto &p : r.second.procesos_uso) {
-                p.second--;
-                if (p.second <= 0) {
-                    r.second.contador++; // liberar recurso
-                    terminados.push_back(p.first);
+        
+        // Decrementar el tiempo de uso y liberar recursos que ya terminaron
+        for (auto& [nombre, recurso] : recursos) {
+            std::vector<std::string> procesos_terminados;
+            
+            for (auto& [pid, tiempo_restante] : recurso.procesos_uso) {
+                tiempo_restante--;
+                if (tiempo_restante <= 0) {
+                    recurso.contador++; // Liberar el recurso
+                    procesos_terminados.push_back(pid);
                 }
             }
-            for (auto &pid : terminados) {
-                r.second.procesos_uso.erase(pid);
+            
+            // Eliminar procesos que ya terminaron de usar el recurso
+            for (const auto& pid : procesos_terminados) {
+                recurso.procesos_uso.erase(pid);
             }
         }
-
+        
+        // Si no hubo acción, CPU IDLE
         if (!accion_realizada) {
-            std::string bloque = "[CPU IDLE]";
-            std::cout << bloque << "\n";
-            linea_tiempo.push_back({ciclo, bloque, RESET});
+            if (updateGUI) {
+                updateGUI("CPU IDLE", ciclo);
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
-
-    // Mostrar Línea de Tiempo Final (Gantt)
-    std::cout << "\n--- Linea de Tiempo Final ---\n";
-    for (auto &evento : linea_tiempo) {
-        std::cout << "Ciclo " << evento.ciclo << ": " << evento.color << evento.contenido << RESET << "\n";
-    }
-
-    std::cout << "\nSimulacion finalizada.\n";
-}
-
-int main() {
-    auto procesos = leerProcesos("procesos.txt");
-    auto recursos = leerRecursos("recursos.txt");
-    auto acciones = leerAcciones("acciones.txt");
-
-    if (procesos.empty() || recursos.empty() || acciones.empty()) {
-        std::cerr << "Error: Verifica los archivos de entrada.\n";
-        return 1;
-    }
-
-    simularSemaforo(procesos, recursos, acciones);
-    return 0;
 }
