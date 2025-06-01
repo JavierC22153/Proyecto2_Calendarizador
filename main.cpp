@@ -67,53 +67,81 @@ public:
         Refresh();
     }
     
-    void OnPaint(wxPaintEvent& event) {
-        wxAutoBufferedPaintDC dc(this);
-        DoPrepareDC(dc);
-        
-        dc.Clear();
-        dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-        
-        int x = 10;
-        int y = 30;
-        
-        for (size_t i = 0; i < timeline.size(); i++) {
-            const auto& slot = timeline[i];
-            
-            // Dibujar el bloque
-            if (slot.first == "IDLE" || slot.first == "CPU IDLE") {
-                dc.SetBrush(wxBrush(wxColour(200, 200, 200)));
-            } else if (slot.first.find("WAITING") != std::string::npos) {
-                dc.SetBrush(wxBrush(wxColour(255, 200, 100)));
-            } else if (slot.first.find("ACCESSED") != std::string::npos) {
-                dc.SetBrush(wxBrush(wxColour(100, 255, 100)));
-            } else {
-                dc.SetBrush(wxBrush(processColors[slot.first]));
-            }
-            
-            dc.DrawRectangle(x, y, blockWidth, blockHeight);
-            
-            // Texto adaptativo para modo sincronización
-            if (isSync && (slot.first.find("-") != std::string::npos)) {
-                // Mostrar info compacta para sincronización
-                dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-                size_t pos = slot.first.find("-");
-                dc.DrawText(slot.first.substr(0, pos), x + 2, y + 5);
-                dc.DrawText(slot.first.substr(pos + 1, 1), x + 2, y + 20);
-            } else {
-                dc.DrawText(slot.first, x + 5, y + 20);
-            }
-            
-            // Número de ciclo
-            dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-            dc.DrawText(wxString::Format("%d", slot.second), x + 10, y + blockHeight + 5);
-            
-            x += blockWidth;
-        }
-        
-        dc.SetTextForeground(wxColour(255, 0, 0));
-        dc.DrawText(wxString::Format("Ciclo actual: %d", currentCycle), 10, 5);
-    }
+	void OnPaint(wxPaintEvent& event) {
+    	wxAutoBufferedPaintDC dc(this);
+    	DoPrepareDC(dc);
+    	
+    	dc.Clear();
+    	dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+    	
+    	int x = 10;
+    	int y = 30;
+    	
+    	for (size_t i = 0; i < timeline.size(); i++) {
+        	const auto& slot = timeline[i];
+        	
+        	// Dibujar el bloque
+        	if (slot.first == "IDLE" || slot.first == "CPU IDLE") {
+            	dc.SetBrush(wxBrush(wxColour(200, 200, 200)));
+        	} else if (slot.first.find("WAITING") != std::string::npos) {
+            	dc.SetBrush(wxBrush(wxColour(255, 200, 100)));
+        	} else if (slot.first.find("ACCESSED") != std::string::npos) {
+            	// Para ACCESSED, usar el color del proceso
+            	std::string pid = slot.first.substr(1, slot.first.find('-') - 1);
+            	if (processColors.find(pid) != processColors.end()) {
+                	dc.SetBrush(wxBrush(processColors[pid]));
+            	} else {
+                	dc.SetBrush(wxBrush(wxColour(100, 255, 100)));
+            	}
+        	} else {
+            	// Para otros casos, buscar si es un PID conocido
+            	if (processColors.find(slot.first) != processColors.end()) {
+                	dc.SetBrush(wxBrush(processColors[slot.first]));
+            	} else {
+                	// Si no se encuentra el color, usar un color por defecto
+                	dc.SetBrush(wxBrush(wxColour(150, 150, 255)));
+            	}
+        	}
+        	
+        	dc.DrawRectangle(x, y, blockWidth, blockHeight);
+        	
+        	if (isSync && (slot.first.find("-") != std::string::npos)) {
+            	// Mostrar info compacta para sincronización
+            	dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+            	std::string text = slot.first;
+            	if (text[0] == '[' && text[text.length()-1] == ']') {
+                	text = text.substr(1, text.length()-2);
+            	}
+            	size_t pos = text.find("-");
+            	if (pos != std::string::npos) {
+                	std::string pid = text.substr(0, pos);
+                	std::string resto = text.substr(pos + 1);
+                	dc.DrawText(pid, x + 2, y + 5);
+                	
+                	// Mostrar el tipo de acción y estado
+                	size_t pos2 = resto.find("-");
+                	if (pos2 != std::string::npos) {
+                    	dc.DrawText(resto.substr(0, pos2), x + 2, y + 20);
+                    	dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+                    	std::string estado = resto.substr(resto.rfind("-") + 1);
+                    	dc.DrawText(estado, x + 2, y + 35);
+                	}
+            	}
+        	} else {
+            	dc.DrawText(slot.first, x + 5, y + 20);
+        	}
+        	
+        	// Número de ciclo
+        	dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+        	dc.DrawText(wxString::Format("%d", slot.second), x + 10, y + blockHeight + 5);
+        	
+        	x += blockWidth;
+    	}
+    	
+    	dc.SetTextForeground(wxColour(255, 0, 0));
+    	dc.DrawText(wxString::Format("Ciclo actual: %d", currentCycle), 10, 5);
+	}
+	
 };
 
 // Panel de lista de información
@@ -507,17 +535,27 @@ public:
         clearButton->Bind(wxEVT_BUTTON, &SyncPanel::OnClear, this);
     }
     
-    void OnLoadProcesses(wxCommandEvent& event) {
-        wxFileDialog openFileDialog(this, "Cargar archivo de procesos", "", "",
-                                    "Archivos de texto (*.txt)|*.txt", wxFD_OPEN | wxFD_FILE_MUST_EXIST);
-        
-        if (openFileDialog.ShowModal() == wxID_OK) {
-            procesos = leerProcesosDesdeArchivo(openFileDialog.GetPath().ToStdString());
-            processInfoPanel->ShowProcesses(procesos);
-            wxMessageBox(wxString::Format("Se cargaron %zu procesos", procesos.size()), "Información");
-        }
-    }
-    
+	void OnLoadProcesses(wxCommandEvent& event) {
+    	wxFileDialog openFileDialog(this, "Cargar archivo de procesos", "", "",
+                                	"Archivos de texto (*.txt)|*.txt", wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    	
+    	if (openFileDialog.ShowModal() == wxID_OK) {
+        	procesos = leerProcesosDesdeArchivo(openFileDialog.GetPath().ToStdString());
+        	
+        	std::random_device rd;
+        	std::mt19937 gen(rd());
+        	std::uniform_int_distribution<> dis(100, 255);
+        	
+        	for (const auto& p : procesos) {
+            	wxColour color(dis(gen), dis(gen), dis(gen));
+            	ganttPanel->SetProcessColor(p.pid, color);
+        	}
+        	
+        	processInfoPanel->ShowProcesses(procesos);
+        	wxMessageBox(wxString::Format("Se cargaron %zu procesos", procesos.size()), "Información");
+    	}
+	}
+
     void OnLoadResources(wxCommandEvent& event) {
         wxFileDialog openFileDialog(this, "Cargar archivo de recursos", "", "",
                                     "Archivos de texto (*.txt)|*.txt", wxFD_OPEN | wxFD_FILE_MUST_EXIST);
