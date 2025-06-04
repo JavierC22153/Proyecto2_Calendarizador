@@ -21,7 +21,16 @@
 #include <random>
 #include "scheduler.h"
 
-// Panel de Diagrama de Gantt MEJORADO
+// Estructura para almacenar datos de un algoritmo
+struct AlgorithmData {
+    std::string name;
+    std::vector<std::pair<std::string, int>> timeline;
+    std::vector<Proceso> procesos;
+    SimulationResult result;
+    int trackIndex;
+};
+
+// Panel de Diagrama de Gantt MULTI-ALGORITMO
 class GanttPanel : public wxScrolledWindow {
 private:
     struct TimeSlot {
@@ -33,24 +42,40 @@ private:
         std::string resource;
         std::string action;
         std::string status;
+        int trackIndex; // Nuevo: índice del track/algoritmo
     };
     
     std::vector<TimeSlot> timeline;
     std::map<std::string, wxColour> processColors;
+    std::vector<AlgorithmData> algorithms; // Almacenar datos de todos los algoritmos
     int currentCycle = 0;
-    int blockWidth = 120;  // Más ancho para más información
-    int blockHeight = 60;  // Más alto para múltiples líneas
+    int blockWidth = 80;  
+    int blockHeight = 50;  
+    int trackHeight = 80;  // Altura total por track (incluyendo separación)
+    int trackSeparation = 30; // Separación entre tracks
     bool isSync = false;
     
 public:
     GanttPanel(wxWindow* parent) : wxScrolledWindow(parent) {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetVirtualSize(800, 200);
-        SetScrollRate(10, 0);
+        SetScrollRate(10, 10); // Permitir scroll vertical también
         Bind(wxEVT_PAINT, &GanttPanel::OnPaint, this);
     }
     
     void SetSyncMode(bool sync) { isSync = sync; }
+    
+    void StartNewAlgorithm(const std::string& algorithmName) {
+        AlgorithmData newAlgorithm;
+        newAlgorithm.name = algorithmName;
+        newAlgorithm.trackIndex = algorithms.size();
+        algorithms.push_back(newAlgorithm);
+        
+        // Ajustar tamaño virtual para incluir nuevos tracks
+        int totalHeight = (algorithms.size() * trackHeight) + 100;
+        SetVirtualSize(GetVirtualSize().GetWidth(), totalHeight);
+        Refresh();
+    }
     
     void AddTimeSlot(const std::string& content, int cycle) {
         TimeSlot slot;
@@ -58,6 +83,7 @@ public:
         slot.cycle = cycle;
         slot.isIdle = (content == "CPU IDLE" || content == "IDLE");
         slot.isWaiting = (content.find("WAITING") != std::string::npos);
+        slot.trackIndex = algorithms.empty() ? 0 : algorithms.size() - 1; // Track actual
         
         // Parsear contenido para modo sincronización
         if (isSync && !slot.isIdle) {
@@ -82,17 +108,38 @@ public:
         timeline.push_back(slot);
         currentCycle = cycle;
         
-        int requiredWidth = (timeline.size() + 2) * blockWidth;
+        // Agregar al algoritmo actual también
+        if (!algorithms.empty()) {
+            algorithms.back().timeline.push_back({content, cycle});
+        }
+        
+        // Calcular ancho requerido para este track
+        int maxTimeSlots = 0;
+        for (const auto& algo : algorithms) {
+            maxTimeSlots = std::max(maxTimeSlots, (int)algo.timeline.size());
+        }
+        
+        int requiredWidth = (maxTimeSlots + 2) * blockWidth + 200; // +200 para etiquetas
         if (requiredWidth > GetVirtualSize().GetWidth()) {
-            SetVirtualSize(requiredWidth, 200);
+            SetVirtualSize(requiredWidth, GetVirtualSize().GetHeight());
         }
         
         Refresh();
-        Scroll(std::max(0, (int)(timeline.size() * blockWidth / 10) - 50), 0);
+        // Auto-scroll al final horizontalmente
+        int scrollUnits = std::max(0, (requiredWidth / 10) - (GetClientSize().GetWidth() / 10));
+        Scroll(scrollUnits, GetViewStart().y);
+    }
+    
+    void FinishCurrentAlgorithm(const SimulationResult& result, const std::vector<Proceso>& procesos) {
+        if (!algorithms.empty()) {
+            algorithms.back().result = result;
+            algorithms.back().procesos = procesos;
+        }
     }
      
     void Clear() {
         timeline.clear();
+        algorithms.clear();
         currentCycle = 0;
         SetVirtualSize(800, 200);
         Refresh();
@@ -105,82 +152,117 @@ public:
         dc.Clear();
         dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
         
-        int x = 10;
-        int y = 40;  // Más espacio arriba para el ciclo
-        
-        for (size_t i = 0; i < timeline.size(); i++) {
-            const auto& slot = timeline[i];
+        // Dibujar cada algoritmo en su propio track
+        for (size_t trackIdx = 0; trackIdx < algorithms.size(); trackIdx++) {
+            const auto& algorithm = algorithms[trackIdx];
+            int trackY = 50 + trackIdx * trackHeight;
             
-            // Dibujar número de ciclo arriba
-            dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+            // Dibujar etiqueta del algoritmo
+            dc.SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
             dc.SetTextForeground(wxColour(0, 0, 0));
-            wxString cycleText = wxString::Format("C%d", slot.cycle);
-            wxSize cycleSize = dc.GetTextExtent(cycleText);
-            dc.DrawText(cycleText, x + (blockWidth - cycleSize.x) / 2, 5);
+            dc.DrawText(algorithm.name, 10, trackY - 30);
             
-            // Configurar colores y bordes según el estado
-            if (slot.isIdle) {
-                dc.SetBrush(wxBrush(wxColour(220, 220, 220)));
-                dc.SetPen(wxPen(wxColour(100, 100, 100), 1, wxPENSTYLE_SOLID));
-            } else if (slot.isWaiting) {
-                dc.SetBrush(wxBrush(wxColour(255, 200, 200)));  // Rojo claro para waiting
-                dc.SetPen(wxPen(wxColour(200, 0, 0), 2, wxPENSTYLE_DOT));  // Borde punteado
-            } else {
-                // Estado ACCESSED - usar color del proceso
-                if (processColors.find(slot.processId) != processColors.end()) {
-                    dc.SetBrush(wxBrush(processColors[slot.processId]));
-                } else {
-                    dc.SetBrush(wxBrush(wxColour(200, 255, 200)));  // Verde claro por defecto
-                }
-                dc.SetPen(wxPen(wxColour(0, 150, 0), 2, wxPENSTYLE_SOLID));  // Borde verde
-            }
-            
-            dc.DrawRectangle(x, y, blockWidth - 5, blockHeight);
-            
-            // Dibujar contenido según el modo
-            dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-            
-            if (slot.isIdle) {
+            // Dibujar métricas básicas del algoritmo
+            if (algorithm.result.avgWaitingTime >= 0) {
+                dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
                 dc.SetTextForeground(wxColour(100, 100, 100));
-                wxSize textSize = dc.GetTextExtent("CPU IDLE");
-                dc.DrawText("CPU IDLE", x + (blockWidth - textSize.x) / 2, y + (blockHeight - textSize.y) / 2);
-            } else if (isSync) {
-                // Modo sincronización - mostrar información detallada
-                dc.SetTextForeground(wxColour(0, 0, 0));
-                int lineHeight = 12;
-                int textY = y + 5;
-                
-                dc.DrawText(slot.processId, x + 5, textY);
-                dc.DrawText(slot.action, x + 5, textY + lineHeight);
-                dc.DrawText(slot.resource, x + 5, textY + lineHeight * 2);
-                
-                // Estado con color específico
-                if (slot.isWaiting) {
-                    dc.SetTextForeground(wxColour(180, 0, 0));
-                    dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-                } else {
-                    dc.SetTextForeground(wxColour(0, 120, 0));
-                    dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-                }
-                dc.DrawText(slot.status, x + 5, textY + lineHeight * 3);
-            } else {
-                // Modo calendarización - mostrar solo PID
-                dc.SetTextForeground(wxColour(0, 0, 0));
-                wxSize textSize = dc.GetTextExtent(slot.processId);
-                dc.DrawText(slot.processId, x + (blockWidth - textSize.x) / 2, y + (blockHeight - textSize.y) / 2);
+                wxString metricsText = wxString::Format("Avg WT: %.2f | Avg TAT: %.2f", 
+                    algorithm.result.avgWaitingTime, algorithm.result.avgTurnaroundTime);
+                dc.DrawText(metricsText, 10, trackY - 15);
             }
             
-            x += blockWidth;
+            // Dibujar timeline del algoritmo
+            int x = 150; // Offset para las etiquetas
+            
+            for (size_t i = 0; i < algorithm.timeline.size(); i++) {
+                const auto& slot = algorithm.timeline[i];
+                
+                // Dibujar número de ciclo arriba
+                dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+                dc.SetTextForeground(wxColour(0, 0, 0));
+                wxString cycleText = wxString::Format("C%d", slot.second);
+                wxSize cycleSize = dc.GetTextExtent(cycleText);
+                dc.DrawText(cycleText, x + (blockWidth - cycleSize.x) / 2, trackY - 10);
+                
+                // Configurar colores según el contenido
+                bool isIdle = (slot.first == "CPU IDLE" || slot.first == "IDLE");
+                bool isWaiting = (slot.first.find("WAITING") != std::string::npos);
+                
+                if (isIdle) {
+                    dc.SetBrush(wxBrush(wxColour(220, 220, 220)));
+                    dc.SetPen(wxPen(wxColour(100, 100, 100), 1, wxPENSTYLE_SOLID));
+                } else if (isWaiting) {
+                    dc.SetBrush(wxBrush(wxColour(255, 200, 200)));
+                    dc.SetPen(wxPen(wxColour(200, 0, 0), 2, wxPENSTYLE_DOT));
+                } else {
+                    // Obtener PID para color
+                    std::string pid = slot.first;
+                    if (isSync) {
+                        size_t dashPos = slot.first.find('-');
+                        if (dashPos != std::string::npos) {
+                            pid = slot.first.substr(0, dashPos);
+                        }
+                    }
+                    
+                    if (processColors.find(pid) != processColors.end()) {
+                        dc.SetBrush(wxBrush(processColors[pid]));
+                    } else {
+                        dc.SetBrush(wxBrush(wxColour(200, 255, 200)));
+                    }
+                    dc.SetPen(wxPen(wxColour(0, 150, 0), 2, wxPENSTYLE_SOLID));
+                }
+                
+                dc.DrawRectangle(x, trackY, blockWidth - 2, blockHeight);
+                
+                // Dibujar contenido
+                dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+                
+                if (isIdle) {
+                    dc.SetTextForeground(wxColour(100, 100, 100));
+                    wxSize textSize = dc.GetTextExtent("IDLE");
+                    dc.DrawText("IDLE", x + (blockWidth - textSize.x) / 2, trackY + (blockHeight - textSize.y) / 2);
+                } else if (isSync) {
+                    // Información detallada para sincronización
+                    std::vector<std::string> parts;
+                    std::stringstream ss(slot.first);
+                    std::string part;
+                    while (std::getline(ss, part, '-')) {
+                        parts.push_back(part);
+                    }
+                    
+                    dc.SetTextForeground(wxColour(0, 0, 0));
+                    if (parts.size() >= 4) {
+                        dc.DrawText(parts[0], x + 2, trackY + 5);      // PID
+                        dc.DrawText(parts[1], x + 2, trackY + 15);     // Action
+                        dc.DrawText(parts[2], x + 2, trackY + 25);     // Resource
+                        
+                        if (isWaiting) {
+                            dc.SetTextForeground(wxColour(150, 0, 0));
+                        } else {
+                            dc.SetTextForeground(wxColour(0, 100, 0));
+                        }
+                        dc.DrawText(parts[3], x + 2, trackY + 35);     // Status
+                    }
+                } else {
+                    // Solo PID para calendarización
+                    dc.SetTextForeground(wxColour(0, 0, 0));
+                    wxSize textSize = dc.GetTextExtent(slot.first);
+                    dc.DrawText(slot.first, x + (blockWidth - textSize.x) / 2, trackY + (blockHeight - textSize.y) / 2);
+                }
+                
+                x += blockWidth;
+            }
+            
+            // Línea separadora entre tracks
+            if (trackIdx < algorithms.size() - 1) {
+                dc.SetPen(wxPen(wxColour(200, 200, 200), 1, wxPENSTYLE_SOLID));
+                dc.DrawLine(0, trackY + blockHeight + trackSeparation/2, GetVirtualSize().GetWidth(), trackY + blockHeight + trackSeparation/2);
+            }
         }
         
-        // Mostrar ciclo actual
-        dc.SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-        dc.SetTextForeground(wxColour(200, 0, 0));
-        dc.DrawText(wxString::Format("Ciclo actual: %d", currentCycle), 10, y + blockHeight + 15);
-        
-        // Leyenda para modo sincronización
-        if (isSync) {
-            int legendY = y + blockHeight + 40;
+        // Leyenda para modo sincronización (solo si hay algoritmos)
+        if (isSync && !algorithms.empty()) {
+            int legendY = 50 + algorithms.size() * trackHeight + 20;
             dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
             
             // ACCESSED
@@ -207,11 +289,77 @@ public:
     void SetProcessColor(const std::string& processId, const wxColour& color) {
         processColors[processId] = color;
     }
+    
+    std::vector<AlgorithmData> GetAlgorithmsData() const {
+        return algorithms;
+    }
 };
 
-// ... InfoListPanel y MetricsPanel se mantienen igual ...
+// Panel de métricas MULTI-ALGORITMO
+class MetricsPanel : public wxPanel {
+private:
+    wxNotebook* algorithmNotebook;
+    std::vector<wxPanel*> algorithmPanels;
+    
+public:
+    MetricsPanel(wxWindow* parent) : wxPanel(parent) {
+        wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
+        
+        wxStaticText* title = new wxStaticText(this, wxID_ANY, "Métricas por Algoritmo");
+        title->SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        mainSizer->Add(title, 0, wxALL, 10);
+        
+        algorithmNotebook = new wxNotebook(this, wxID_ANY);
+        mainSizer->Add(algorithmNotebook, 1, wxEXPAND | wxALL, 5);
+        
+        SetSizer(mainSizer);
+    }
+    
+    void AddAlgorithmMetrics(const std::string& algorithmName, const SimulationResult& result, const std::vector<Proceso>& procesos) {
+        wxPanel* panel = new wxPanel(algorithmNotebook);
+        wxBoxSizer* panelSizer = new wxBoxSizer(wxVERTICAL);
+        
+        // Métricas generales
+        wxStaticText* avgWaitingLabel = new wxStaticText(panel, wxID_ANY, 
+            wxString::Format("Tiempo de Espera Promedio: %.2f", result.avgWaitingTime));
+        wxStaticText* avgTurnaroundLabel = new wxStaticText(panel, wxID_ANY, 
+            wxString::Format("Tiempo de Retorno Promedio: %.2f", result.avgTurnaroundTime));
+        
+        avgWaitingLabel->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        avgTurnaroundLabel->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        
+        panelSizer->Add(avgWaitingLabel, 0, wxALL, 5);
+        panelSizer->Add(avgTurnaroundLabel, 0, wxALL, 5);
+        panelSizer->Add(new wxStaticLine(panel), 0, wxEXPAND | wxALL, 10);
+        
+        // Tabla de métricas por proceso
+        wxListCtrl* processMetrics = new wxListCtrl(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                                    wxLC_REPORT | wxLC_SINGLE_SEL);
+        processMetrics->AppendColumn("PID", wxLIST_FORMAT_LEFT, 100);
+        processMetrics->AppendColumn("Tiempo de Espera", wxLIST_FORMAT_CENTER, 120);
+        processMetrics->AppendColumn("Tiempo de Retorno", wxLIST_FORMAT_CENTER, 120);
+        processMetrics->AppendColumn("Tiempo de Completación", wxLIST_FORMAT_CENTER, 140);
+        
+        for (size_t i = 0; i < procesos.size(); i++) {
+            long index = processMetrics->InsertItem(i, procesos[i].pid);
+            processMetrics->SetItem(index, 1, wxString::Format("%d", procesos[i].waiting_time));
+            processMetrics->SetItem(index, 2, wxString::Format("%d", procesos[i].turnaround_time));
+        }
+        
+        panelSizer->Add(processMetrics, 1, wxEXPAND | wxALL, 5);
+        
+        panel->SetSizer(panelSizer);
+        algorithmNotebook->AddPage(panel, algorithmName);
+        algorithmPanels.push_back(panel);
+    }
+    
+    void Clear() {
+        algorithmNotebook->DeleteAllPages();
+        algorithmPanels.clear();
+    }
+};
 
-// Panel de lista de información
+// Panel de lista de información (sin cambios)
 class InfoListPanel : public wxPanel {
 private:
     wxListCtrl* listCtrl;
@@ -288,60 +436,7 @@ public:
     }
 };
 
-// Panel de métricas
-class MetricsPanel : public wxPanel {
-private:
-    wxStaticText* avgWaitingLabel;
-    wxStaticText* avgTurnaroundLabel;
-    wxListCtrl* processMetrics;
-    
-public:
-    MetricsPanel(wxWindow* parent) : wxPanel(parent) {
-        wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
-        
-        wxStaticText* title = new wxStaticText(this, wxID_ANY, "Métricas de Eficiencia");
-        title->SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-        mainSizer->Add(title, 0, wxALL, 10);
-        
-        avgWaitingLabel = new wxStaticText(this, wxID_ANY, "Tiempo de Espera Promedio: -");
-        avgTurnaroundLabel = new wxStaticText(this, wxID_ANY, "Tiempo de Retorno Promedio: -");
-        
-        mainSizer->Add(avgWaitingLabel, 0, wxALL, 5);
-        mainSizer->Add(avgTurnaroundLabel, 0, wxALL, 5);
-        
-        mainSizer->Add(new wxStaticLine(this), 0, wxEXPAND | wxALL, 10);
-        
-        processMetrics = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                        wxLC_REPORT | wxLC_SINGLE_SEL);
-        processMetrics->AppendColumn("PID", wxLIST_FORMAT_LEFT, 100);
-        processMetrics->AppendColumn("Tiempo de Espera", wxLIST_FORMAT_CENTER, 150);
-        processMetrics->AppendColumn("Tiempo de Retorno", wxLIST_FORMAT_CENTER, 150);
-        
-        mainSizer->Add(processMetrics, 1, wxEXPAND | wxALL, 5);
-        
-        SetSizer(mainSizer);
-    }
-    
-    void UpdateMetrics(double avgWaiting, double avgTurnaround, const std::vector<Proceso>& procesos) {
-        avgWaitingLabel->SetLabel(wxString::Format("Tiempo de Espera Promedio: %.2f", avgWaiting));
-        avgTurnaroundLabel->SetLabel(wxString::Format("Tiempo de Retorno Promedio: %.2f", avgTurnaround));
-        
-        processMetrics->DeleteAllItems();
-        for (size_t i = 0; i < procesos.size(); i++) {
-            long index = processMetrics->InsertItem(i, procesos[i].pid);
-            processMetrics->SetItem(index, 1, wxString::Format("%d", procesos[i].waiting_time));
-            processMetrics->SetItem(index, 2, wxString::Format("%d", procesos[i].turnaround_time));
-        }
-    }
-    
-    void Clear() {
-        avgWaitingLabel->SetLabel("Tiempo de Espera Promedio: -");
-        avgTurnaroundLabel->SetLabel("Tiempo de Retorno Promedio: -");
-        processMetrics->DeleteAllItems();
-    }
-};
-
-// SchedulingPanel se mantiene igual...
+// SchedulingPanel MODIFICADO para multi-algoritmo
 class SchedulingPanel : public wxPanel {
 private:
     wxChoice* algorithmChoice;
@@ -358,6 +453,8 @@ private:
     std::thread* simulationThread = nullptr;
     std::atomic<bool> stopSimulation{false};
     
+    std::vector<std::string> algorithmNames = {"FIFO", "SJF", "SRT", "Round Robin", "Priority"};
+    
 public:
     SchedulingPanel(wxWindow* parent) : wxPanel(parent) {
         wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
@@ -369,11 +466,9 @@ public:
         controlSizer->Add(algoLabel, 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);
         
         wxArrayString algorithms;
-        algorithms.Add("FIFO");
-        algorithms.Add("SJF");
-        algorithms.Add("SRT");
-        algorithms.Add("Round Robin");
-        algorithms.Add("Priority");
+        for (const auto& name : algorithmNames) {
+            algorithms.Add(name);
+        }
         
         algorithmList = new wxCheckListBox(controlPanel, wxID_ANY, wxDefaultPosition, wxSize(150, 100), algorithms);
         controlSizer->Add(algorithmList, 0, wxALL, 5);
@@ -401,7 +496,7 @@ public:
         wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
         
         ganttPanel = new GanttPanel(leftPanel);
-        leftSizer->Add(ganttPanel, 1, wxEXPAND | wxALL, 5);
+        leftSizer->Add(ganttPanel, 2, wxEXPAND | wxALL, 5); // Más espacio para múltiples tracks
         
         infoPanel = new InfoListPanel(leftPanel);
         leftSizer->Add(infoPanel, 1, wxEXPAND | wxALL, 5);
@@ -410,7 +505,7 @@ public:
         
         metricsPanel = new MetricsPanel(splitter);
         
-        splitter->SplitVertically(leftPanel, metricsPanel, 600);
+        splitter->SplitVertically(leftPanel, metricsPanel, 700);
         mainSizer->Add(splitter, 1, wxEXPAND);
         
         SetSizer(mainSizer);
@@ -486,6 +581,14 @@ public:
                 int algo = selections[i];
                 std::vector<Proceso> procesosTemp = procesos;
                 
+                // Iniciar nuevo algoritmo en el Gantt
+                wxTheApp->CallAfter([this, algo]() {
+                    ganttPanel->StartNewAlgorithm(algorithmNames[algo]);
+                });
+                
+                // Pequeña pausa para que se renderice
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                
                 // Callback para actualizar GUI
                 auto updateGUI = [this](const std::string& pid, int cycle) {
                     wxTheApp->CallAfter([this, pid, cycle]() {
@@ -494,7 +597,7 @@ public:
                 };
                 
                 SimulationResult result;
-                // Algoritmos de calendarizacion
+                // Ejecutar algoritmo correspondiente
                 switch (algo) {
                     case 0: // FIFO
                         result = fifo(procesosTemp, updateGUI);
@@ -513,14 +616,15 @@ public:
                         break;
                 }
                 
-                // Actualizar métricas
-                wxTheApp->CallAfter([this, result, procesosTemp]() {
-                    metricsPanel->UpdateMetrics(result.avgWaitingTime, result.avgTurnaroundTime, procesosTemp);
+                // Finalizar algoritmo y actualizar métricas
+                wxTheApp->CallAfter([this, result, procesosTemp, algo]() {
+                    ganttPanel->FinishCurrentAlgorithm(result, procesosTemp);
+                    metricsPanel->AddAlgorithmMetrics(algorithmNames[algo], result, procesosTemp);
                 });
                 
                 // Pausa entre algoritmos si hay más de uno
                 if (i < selections.GetCount() - 1) {
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 }
             }
             
@@ -554,7 +658,7 @@ public:
     }
 };
 
-// SyncPanel CORREGIDO
+// SyncPanel (sin cambios significativos)
 class SyncPanel : public wxPanel {
 private:
     wxRadioBox* syncModeRadio;
@@ -574,7 +678,6 @@ private:
     std::thread* simulationThread = nullptr;
     std::atomic<bool> stopSimulation{false};
     
-    // Estructura para trackear operaciones activas en mutex
     struct OperacionActiva {
         std::string pid;
         std::string recurso;
@@ -589,7 +692,6 @@ public:
     SyncPanel(wxWindow* parent) : wxPanel(parent) {
         wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
         
-        // Panel de controles
         wxPanel* controlPanel = new wxPanel(this);
         wxBoxSizer* controlSizer = new wxBoxSizer(wxHORIZONTAL);
         
@@ -615,14 +717,11 @@ public:
         controlPanel->SetSizer(controlSizer);
         mainSizer->Add(controlPanel, 0, wxEXPAND | wxALL, 5);
         
-        // Splitter para Gantt e información
         wxSplitterWindow* splitter = new wxSplitterWindow(this);
         
-        // Panel izquierdo con Gantt
         ganttPanel = new GanttPanel(splitter);
         ganttPanel->SetSyncMode(true);
         
-        // Panel derecho con información
         wxNotebook* infoNotebook = new wxNotebook(splitter, wxID_ANY);
         
         processInfoPanel = new InfoListPanel(infoNotebook);
@@ -638,7 +737,6 @@ public:
         
         SetSizer(mainSizer);
         
-        // Eventos
         loadProcessesButton->Bind(wxEVT_BUTTON, &SyncPanel::OnLoadProcesses, this);
         loadResourcesButton->Bind(wxEVT_BUTTON, &SyncPanel::OnLoadResources, this);
         loadActionsButton->Bind(wxEVT_BUTTON, &SyncPanel::OnLoadActions, this);
@@ -702,6 +800,11 @@ public:
         bool isMutex = (syncModeRadio->GetSelection() == 0);
         
         simulationThread = new std::thread([this, isMutex]() {
+            // Iniciar algoritmo único
+            wxTheApp->CallAfter([this, isMutex]() {
+                ganttPanel->StartNewAlgorithm(isMutex ? "Mutex" : "Semáforo");
+            });
+            
             if (isMutex) {
                 SimulateMutex();
             } else {
@@ -721,9 +824,8 @@ public:
         for (const auto& a : acciones) {
             if (a.ciclo > max_ciclo) max_ciclo = a.ciclo;
         }
-        max_ciclo += 10; // Margen adicional
+        max_ciclo += 10;
         
-        // Resetear estado de recursos
         for (auto& [nombre, recurso] : recursos) {
             recurso.ocupado = false;
             recurso.proceso_actual = "";
@@ -734,23 +836,17 @@ public:
         for (; ciclo <= max_ciclo && !stopSimulation; ciclo++) {
             bool accion_realizada = false;
             
-            // Procesar nuevas acciones del ciclo actual
             for (const auto& a : acciones) {
                 if (a.ciclo == ciclo) {
                     auto& recurso = recursos[a.recurso];
                     std::string bloque;
                     
                     if (!recurso.ocupado) {
-                        // Recurso disponible - ACCESSED
                         recurso.ocupado = true;
                         recurso.proceso_actual = a.pid;
                         bloque = a.pid + "-" + a.tipo + "-" + a.recurso + "-ACCESSED";
-                        
-                        // Agregar operación activa (duración 2 ciclos para mutex)
                         operaciones_activas.push_back({a.pid, a.recurso, a.tipo, ciclo, 2});
-                        
                     } else {
-                        // Recurso ocupado - WAITING
                         bloque = a.pid + "-" + a.tipo + "-" + a.recurso + "-WAITING";
                     }
                     
@@ -760,26 +856,22 @@ public:
                     
                     accion_realizada = true;
                     
-                    // Actualizar panel de recursos
                     wxTheApp->CallAfter([this]() {
                         resourceInfoPanel->ShowResources(recursos);
                     });
                 }
             }
             
-            // Liberar recursos de operaciones completadas
             std::vector<size_t> operaciones_terminadas;
             for (size_t i = 0; i < operaciones_activas.size(); i++) {
                 auto& op = operaciones_activas[i];
                 if (ciclo >= op.ciclo_inicio + op.duracion) {
-                    // Liberar el recurso
                     recursos[op.recurso].ocupado = false;
                     recursos[op.recurso].proceso_actual = "";
                     operaciones_terminadas.push_back(i);
                 }
             }
             
-            // Eliminar operaciones terminadas (en orden inverso)
             for (int i = operaciones_terminadas.size() - 1; i >= 0; i--) {
                 operaciones_activas.erase(operaciones_activas.begin() + operaciones_terminadas[i]);
             }
@@ -803,7 +895,6 @@ public:
         }
         max_ciclo += 10;
         
-        // Resetear estado de recursos
         for (auto& [nombre, recurso] : recursos) {
             recurso.contador = recurso.contador_inicial;
             recurso.procesos_uso.clear();
@@ -812,19 +903,16 @@ public:
         for (; ciclo <= max_ciclo && !stopSimulation; ciclo++) {
             bool accion_realizada = false;
             
-            // Procesar nuevas acciones del ciclo actual
             for (const auto& a : acciones) {
                 if (a.ciclo == ciclo) {
                     auto& recurso = recursos[a.recurso];
                     std::string bloque;
                     
                     if (recurso.contador > 0) {
-                        // Hay recursos disponibles - ACCESSED
                         recurso.contador--;
-                        recurso.procesos_uso[a.pid] = 3; // Duración de 3 ciclos para semáforos
+                        recurso.procesos_uso[a.pid] = 3;
                         bloque = a.pid + "-" + a.tipo + "-" + a.recurso + "-ACCESSED";
                     } else {
-                        // No hay recursos disponibles - WAITING
                         bloque = a.pid + "-" + a.tipo + "-" + a.recurso + "-WAITING";
                     }
                     
@@ -834,26 +922,23 @@ public:
                     
                     accion_realizada = true;
                     
-                    // Actualizar panel de recursos
                     wxTheApp->CallAfter([this]() {
                         resourceInfoPanel->ShowResources(recursos);
                     });
                 }
             }
             
-            // Decrementar tiempo de uso y liberar recursos
             for (auto& [nombre, recurso] : recursos) {
                 std::vector<std::string> procesos_terminados;
                 
                 for (auto& [pid, tiempo_restante] : recurso.procesos_uso) {
                     tiempo_restante--;
                     if (tiempo_restante <= 0) {
-                        recurso.contador++; // Liberar el recurso
+                        recurso.contador++;
                         procesos_terminados.push_back(pid);
                     }
                 }
                 
-                // Eliminar procesos que terminaron
                 for (const auto& pid : procesos_terminados) {
                     recurso.procesos_uso.erase(pid);
                 }
@@ -903,7 +988,7 @@ private:
     
 public:
     MainWindow() : wxFrame(nullptr, wxID_ANY, "Simulador de Scheduling y Sincronización",
-                           wxDefaultPosition, wxSize(1400, 900)) {
+                           wxDefaultPosition, wxSize(1600, 1000)) {
         wxMenuBar* menuBar = new wxMenuBar();
         
         wxMenu* fileMenu = new wxMenu();
@@ -925,9 +1010,8 @@ public:
         notebook->AddPage(syncPanel, "Sincronizacion");
         
         CreateStatusBar();
-        SetStatusText("Listo para simular");
+        SetStatusText("Listo para simular múltiples algoritmos");
         
-        // Eventos
         Bind(wxEVT_MENU, &MainWindow::OnExit, this, wxID_EXIT);
         Bind(wxEVT_MENU, &MainWindow::OnAbout, this, wxID_ABOUT);
         
@@ -940,13 +1024,14 @@ public:
     
     void OnAbout(wxCommandEvent& event) {
         wxMessageBox("Simulador de Scheduling y Sincronización\n\n"
-                     "Permite simular algoritmos de calendarización y mecanismos de sincronización.\n\n"
+                     "Permite simular múltiples algoritmos de calendarización y mecanismos de sincronización.\n\n"
                      "Características:\n"
                      "• Algoritmos: FIFO, SJF, SRT, Round Robin, Priority\n"
                      "• Sincronización: Mutex y Semáforos\n"
-                     "• Visualización en tiempo real\n"
-                     "• Métricas de rendimiento\n\n"
-                     "Versión 2.0", "Acerca de", wxOK | wxICON_INFORMATION);
+                     "• Visualización multi-algoritmo en tiempo real\n"
+                     "• Métricas independientes por algoritmo\n"
+                     "• Comparación visual de rendimiento\n\n"
+                     "Versión 3.0", "Acerca de", wxOK | wxICON_INFORMATION);
     }
 };
 
