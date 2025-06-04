@@ -10,10 +10,9 @@ SimulationResult priority(std::vector<Proceso>& procesos, UpdateCallback updateG
     while (completados < n) {
         int idx = -1, min_prio = INT_MAX;
 
-        // Buscar el proceso con mayor prioridad (menor número)
+        // Buscar el proceso de mayor prioridad sin importar el arrival_time
         for (int i = 0; i < n; ++i) {
-            if (!procesos[i].terminado && procesos[i].arrival_time <= tiempo &&
-                procesos[i].priority < min_prio) {
+            if (!procesos[i].terminado && procesos[i].priority < min_prio) {
                 min_prio = procesos[i].priority;
                 idx = i;
             }
@@ -21,9 +20,11 @@ SimulationResult priority(std::vector<Proceso>& procesos, UpdateCallback updateG
 
         if (idx != -1) {
             auto& p = procesos[idx];
-            p.waiting_time = tiempo - p.arrival_time;
+            p.waiting_time = tiempo; 
+			// No entendi muy bien lo que pusieron en discord, pero si se toma en cuenta el arrival time
+			// para el tiempo entonces:
+			// p.waiting_time = tiempo - p.arrival_time;
 
-            // Ejecutar el proceso completo
             for (int i = 0; i < p.burst_time; ++i) {
                 result.timeline.push_back({p.pid, tiempo});
                 if (updateGUI) {
@@ -36,14 +37,6 @@ SimulationResult priority(std::vector<Proceso>& procesos, UpdateCallback updateG
             p.turnaround_time = p.waiting_time + p.burst_time;
             p.terminado = true;
             completados++;
-        } else {
-            // CPU IDLE
-            result.timeline.push_back({"IDLE", tiempo});
-            if (updateGUI) {
-                updateGUI("IDLE", tiempo);
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            }
-            tiempo++;
         }
     }
 
@@ -58,3 +51,4 @@ SimulationResult priority(std::vector<Proceso>& procesos, UpdateCallback updateG
 
     return result;
 }
+
