@@ -6,6 +6,10 @@
 - Javier Andrés Chen - 22153
 
 ---
+## Repositorio
+
+[Repositorio](https://github.com/JavierC22153/Proyecto2_Calendarizador.git)
+---
 
 ## 📋 Descripción
 
@@ -19,7 +23,7 @@ Este proyecto implementa un simulador visual de algoritmos de planificación de 
 - ✅ Simulador de mutex  
 - ✅ Simulador de semáforos
 
-La interfaz gráfica ha sido desarrollada con la biblioteca **wxWidgets**, permitiendo una interacción intuitiva con el sistema de planificación.
+La interfaz gráfica ha sido desarrollada con la biblioteca **wxWidgets** y se necesitan paquetes de **gtk**, permitiendo una interacción intuitiva con el sistema de planificación.
 
 ---
 
@@ -42,7 +46,7 @@ sudo apt install libwxgtk3.2-dev
 
 ## Clonar el repositorio
 ```bash
-git clone https://github.com/tu-usuario/Proyecto2_Calendarizador.git
+git clone https://github.com/JavierC22153/Proyecto2_Calendarizador.git 
 cd Proyecto2_Calendarizador
 ```
 
